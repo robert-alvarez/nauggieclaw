@@ -82,6 +82,10 @@ function writeMcpConfig(containerInput: ContainerInput): void {
           NAUGGIECLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
         },
       },
+      gmail: {
+        command: 'npx',
+        args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+      },
     },
   };
   fs.writeFileSync('/tmp/mcp-config.json', JSON.stringify(config, null, 2));

@@ -4,6 +4,7 @@
  */
 import { ChildProcess, execFile, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 
@@ -155,6 +156,17 @@ function buildVolumeMounts(
       hostPath: containerSkillsDir,
       containerPath: '/workspace/skills',
       readonly: true,
+    });
+  }
+
+  // Gmail credentials directory (for Gmail MCP inside the container).
+  // Only mounted when the user has completed Gmail OAuth (~/.gmail-mcp exists).
+  const gmailDir = path.join(os.homedir(), '.gmail-mcp');
+  if (fs.existsSync(gmailDir)) {
+    mounts.push({
+      hostPath: gmailDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false, // MCP may need to refresh OAuth tokens
     });
   }
 
