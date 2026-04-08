@@ -138,106 +138,32 @@ Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse th
 
 **If TEST_OK=false but BUILD_OK=true:** The image built but won't run. Check logs — common cause is runtime not fully started. Wait a moment and retry the test.
 
-## 4. Credential System
+## 4. Auggie Authentication
 
-The credential system depends on the container runtime chosen in step 3.
+NauggieClaww uses Auggie (Augment Code) for agent execution. No Anthropic API key or Claude subscription is needed — authentication is handled entirely through Auggie.
 
-### 4a. Docker → OneCLI
-
-Install OneCLI and its CLI tool:
-
+Check if already authenticated:
 ```bash
-curl -fsSL onecli.sh/install | sh
-curl -fsSL onecli.sh/cli/install | sh
+auggie token print
 ```
 
-Verify both installed: `onecli version`. If the command is not found, the CLI was likely installed to `~/.local/bin/`. Add it to PATH for the current session and persist it:
+**If the command succeeds** (outputs a SESSION= line): authentication is already configured. Continue to step 5.
 
+**If `auggie` is not found:** Auggie is part of Augment Code. Tell the user to install it from [augmentcode.com](https://augmentcode.com) and then return here.
+
+**If `auggie token print` fails or shows no token:** the user needs to log in:
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-# Persist for future sessions (append to shell profile if not already present)
-grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-grep -q '.local/bin' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+auggie login
 ```
 
-Then re-verify with `onecli version`.
+This opens a browser for authentication. Wait for the user to confirm login completed, then re-run `auggie token print` to verify.
 
-Point the CLI at the local OneCLI instance, the ONECLI_URL was output from the install script above:
+**Optional — pin the token to `.env`** (useful on servers or if you want a stable token that doesn't require `auggie login` on each reboot):
 ```bash
-onecli config set api-host ${ONECLI_URL}
+auggie token print >> .env
 ```
 
-Ensure `.env` has the OneCLI URL (create the file if it doesn't exist):
-```bash
-grep -q 'ONECLI_URL' .env 2>/dev/null || echo 'ONECLI_URL=${ONECLI_URL}' >> .env
-```
-
-Check if a secret already exists:
-```bash
-onecli secrets list
-```
-
-If an Anthropic secret is listed, confirm with user: keep or reconfigure? If keeping, skip to step 5.
-
-AskUserQuestion: Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
-
-1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription. You'll run `claude setup-token` in another terminal to get your token."
-2. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com."
-
-#### Subscription path
-
-Tell the user:
-
-> Run `claude setup-token` in another terminal. It will output a token — copy it but don't paste it here.
-
-Then stop and wait for the user to confirm they have the token. Do NOT proceed until they respond.
-
-Once they confirm, they register it with OneCLI. AskUserQuestion with two options:
-
-1. **Dashboard** — description: "Best if you have a browser on this machine. Open ${ONECLI_URL} and add the secret in the UI. Use type 'anthropic' and paste your token as the value."
-2. **CLI** — description: "Best for remote/headless servers. Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_TOKEN --host-pattern api.anthropic.com`"
-
-#### API key path
-
-Tell the user to get an API key from https://console.anthropic.com/settings/keys if they don't have one.
-
-Then AskUserQuestion with two options:
-
-1. **Dashboard** — description: "Best if you have a browser on this machine. Open ${ONECLI_URL} and add the secret in the UI."
-2. **CLI** — description: "Best for remote/headless servers. Run: `onecli secrets create --name Anthropic --type anthropic --value YOUR_KEY --host-pattern api.anthropic.com`"
-
-#### After either path
-
-Ask them to let you know when done.
-
-**If the user's response happens to contain a token or key** (starts with `sk-ant-`): handle it gracefully — run the `onecli secrets create` command with that value on their behalf.
-
-**After user confirms:** verify with `onecli secrets list` that an Anthropic secret exists. If not, ask again.
-
-### 4b. Apple Container → Native Credential Proxy
-
-Apple Container is not compatible with OneCLI. The credential proxy code is already included in the apple-container branch — do NOT invoke `/use-native-credential-proxy` (it would conflict with already-applied code).
-
-Instead, just configure the credentials in `.env`:
-
-AskUserQuestion: Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
-
-1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription. Run `claude setup-token` in another terminal to get your token."
-2. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com."
-
-For subscription: tell the user to run `claude setup-token` in another terminal. Stop and wait for the user to confirm they have completed this step successfully before proceeding.
-
-Once confirmed, add the token to `.env`:
-```bash
-echo 'CLAUDE_CODE_OAUTH_TOKEN=<their-token>' >> .env
-```
-
-For API key: add to `.env`:
-```bash
-echo 'ANTHROPIC_API_KEY=<their-key>' >> .env
-```
-
-Verify the proxy starts: `npm run dev` should show "Credential proxy listening" in the logs.
+This writes `SESSION=<token>` to `.env`. NauggieClaww reads `AUGMENT_SESSION_AUTH` — the container runner also accepts a live Auggie session directly via `auggie token print` at startup, so pinning is optional.
 
 ## 5. Set Up Channels
 
@@ -315,7 +241,7 @@ Run `npx tsx setup/index.ts --step verify` and parse the status block.
 **If STATUS=failed, fix each:**
 - SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nauggieclaw` (macOS) or `systemctl --user restart nauggieclaw` (Linux) or `bash start-nauggieclaw.sh` (WSL nohup)
 - SERVICE=not_found → re-run step 7
-- CREDENTIALS=missing → re-run step 4 (Docker: check `onecli secrets list`; Apple Container: check `.env` for credentials)
+- CREDENTIALS=missing → re-run step 4: run `auggie login` then verify with `auggie token print`
 - CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
 - REGISTERED_GROUPS=0 → re-invoke the channel skills from step 5
 - MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
