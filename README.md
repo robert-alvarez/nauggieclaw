@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="NauggieClaww" width="400">
+  <img src="assets/nanoclaw-logo.png" alt="NauggieClaw" width="400">
 </p>
 
 <p align="center">
@@ -18,11 +18,11 @@
 
 ---
 
-## Why NauggieClaww
+## Why NauggieClaw
 
 [OpenClaw](https://github.com/openclaw/openclaw) is an impressive project, but its security is at the application level (allowlists, pairing codes) rather than true OS-level isolation — and it has nearly half a million lines of code. NanoClaw solved that with a tiny, auditable codebase where agents run in isolated Linux containers.
 
-NauggieClaww takes NanoClaw's architecture and swaps in Auggie as the agent runtime. If you already use Augment Code and want a self-hosted assistant that runs on your existing subscription — no Anthropic API key required — this is it.
+NauggieClaw takes NanoClaw's architecture and swaps in Auggie as the agent runtime. If you already use Augment Code and want a self-hosted assistant that runs on your existing subscription — no Anthropic API key required — this is it.
 
 ## Quick Start
 
@@ -48,11 +48,11 @@ Then run `/setup`. Auggie handles everything: dependencies, authentication, cont
 
 ## Philosophy
 
-**Small enough to understand.** One process, a few source files and no microservices. If you want to understand the full NauggieClaww codebase, just ask Auggie to walk you through it.
+**Small enough to understand.** One process, a few source files and no microservices. If you want to understand the full NauggieClaw codebase, just ask Auggie to walk you through it.
 
 **Secure by isolation.** Agents run in Linux containers (Apple Container on macOS, or Docker) and they can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your host.
 
-**Built for the individual user.** NauggieClaww isn't a monolithic framework; it's software that fits each user's exact needs. Instead of becoming bloatware, NauggieClaww is designed to be bespoke. You make your own fork and have Auggie modify it to match your needs.
+**Built for the individual user.** NauggieClaw isn't a monolithic framework; it's software that fits each user's exact needs. Instead of becoming bloatware, NauggieClaw is designed to be bespoke. You make your own fork and have Auggie modify it to match your needs.
 
 **Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that it's safe to make changes.
 
@@ -63,7 +63,7 @@ Then run `/setup`. Auggie handles everything: dependencies, authentication, cont
 
 **Skills over features.** Instead of adding features to the codebase, contributors submit skills like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
 
-**Best harness, best model.** NauggieClaww runs on Auggie — Augment Code's agent. Auggie's coding and problem-solving capabilities let it modify and expand NauggieClaww and tailor it to each user, all from within your existing Augment subscription.
+**Best harness, best model.** NauggieClaw runs on Auggie — Augment Code's agent. Auggie's coding and problem-solving capabilities let it modify and expand NauggieClaw and tailor it to each user, all from within your existing Augment subscription.
 
 ## What It Supports
 
@@ -96,7 +96,7 @@ From the main channel (your self-chat), you can manage groups and tasks:
 
 ## Customizing
 
-NauggieClaww doesn't use configuration files. To make changes, just tell Auggie what you want:
+NauggieClaw doesn't use configuration files. To make changes, just tell Auggie what you want:
 
 - "Change the trigger word to @Bob"
 - "Remember in the future to make responses shorter and more direct"
@@ -111,7 +111,7 @@ The codebase is small enough that Auggie can safely modify it.
 
 **Don't add features. Add skills.**
 
-If you want to add Telegram support, don't create a PR that adds Telegram to the core codebase. Instead, fork NauggieClaww, make the code changes on a branch, and open a PR. We'll create a `skill/telegram` branch from your PR that other users can merge into their fork.
+If you want to add Telegram support, don't create a PR that adds Telegram to the core codebase. Instead, fork NauggieClaw, make the code changes on a branch, and open a PR. We'll create a `skill/telegram` branch from your PR that other users can merge into their fork.
 
 Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
 
@@ -166,7 +166,7 @@ Agents run in containers, not behind application-level permission checks. They c
 
 **Why no configuration files?**
 
-We don't want configuration sprawl. Every user should customize NauggieClaww so that the code does exactly what they want, rather than configuring a generic system. If you prefer having config files, you can tell Auggie to add them.
+We don't want configuration sprawl. Every user should customize NauggieClaw so that the code does exactly what they want, rather than configuring a generic system. If you prefer having config files, you can tell Auggie to add them.
 
 **Can I use a different model?**
 
@@ -180,7 +180,7 @@ For local models, use the `/add-ollama-tool` skill to give agents access to loca
 
 **How do I debug issues?**
 
-Ask Auggie. "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?" That's the AI-native approach that underlies NauggieClaww.
+Ask Auggie. "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?" That's the AI-native approach that underlies NauggieClaw.
 
 **Why isn't the setup working for me?**
 
