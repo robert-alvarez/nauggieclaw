@@ -421,7 +421,13 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (!line) continue;
+        // Surface Ollama activity at info level so it appears in normal logs.
+        if (line.includes('[OLLAMA]')) {
+          logger.info({ container: group.folder }, line);
+        } else {
+          logger.debug({ container: group.folder }, line);
+        }
       }
       // Don't reset timeout on stderr — auggie writes debug logs continuously.
       // Timeout only resets on actual NDJSON result lines in stdout.

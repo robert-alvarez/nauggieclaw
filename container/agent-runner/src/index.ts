@@ -71,6 +71,7 @@ function log(message: string): void {
 function writeMcpConfig(containerInput: ContainerInput): void {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
+  const ollamaMcpPath = path.join(__dirname, 'ollama-mcp-stdio.js');
   const config = {
     mcpServers: {
       nauggieclaw: {
@@ -80,6 +81,14 @@ function writeMcpConfig(containerInput: ContainerInput): void {
           NAUGGIECLAW_CHAT_JID: containerInput.chatJid,
           NAUGGIECLAW_GROUP_FOLDER: containerInput.groupFolder,
           NAUGGIECLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+        },
+      },
+      ollama: {
+        command: 'node',
+        args: [ollamaMcpPath],
+        env: {
+          OLLAMA_HOST: process.env.OLLAMA_HOST || '',
+          OLLAMA_ADMIN_TOOLS: process.env.OLLAMA_ADMIN_TOOLS || '',
         },
       },
     },
