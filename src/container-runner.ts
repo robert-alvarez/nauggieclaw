@@ -218,14 +218,24 @@ function buildVolumeMounts(
 
 /**
  * Resolve the Augment session auth token for container injection.
- * Prefers the AUGMENT_SESSION_AUTH env var (set in .env or environment).
- * Falls back to a fresh token from `auggie token print` so the token is
- * always valid even if the .env value is stale.
+ * Check order:
+ *  1. AUGMENT_SESSION_AUTH process env var (set before launch, e.g. manual shell export)
+ *  2. AUGMENT_SESSION_AUTH read from .env via readEnvFile in config — works under launchd
+ *     whose restricted PATH/env doesn't inherit the user's shell environment.
+ *  3. Live token from `auggie token print` (users who ran `auggie login` on the host).
  */
 async function resolveAugmentSessionAuth(): Promise<string | undefined> {
+  // 1. Runtime env var — populated when the process is started with it already set.
   if (process.env.AUGMENT_SESSION_AUTH) {
     return process.env.AUGMENT_SESSION_AUTH;
   }
+  // 2. Config-loaded value from .env file — the primary path under launchd, where
+  //    process.env is not populated from .env but config.ts reads it via readEnvFile.
+  if (AUGMENT_SESSION_AUTH) {
+    return AUGMENT_SESSION_AUTH;
+  }
+  // 3. Live session from the host auggie CLI — fallback for users who ran `auggie login`
+  //    but haven't pinned AUGMENT_SESSION_AUTH in .env.
   try {
     const { stdout } = await execFileAsync('auggie', ['token', 'print'], {
       timeout: 5000,
