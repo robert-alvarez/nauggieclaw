@@ -187,9 +187,12 @@ export class GroupQueue {
       fs.mkdirSync(inputDir, { recursive: true });
       const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
       const filepath = path.join(inputDir, filename);
-      const tempPath = `${filepath}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
-      fs.renameSync(tempPath, filepath);
+      // Write directly to the final path — no temp+rename.
+      // On macOS/Docker with virtiofs, readdirSync sees a renamed file immediately
+      // but readFileSync can return empty bytes until the data page propagates,
+      // causing JSON.parse('') to throw and the message to be silently dropped.
+      // A direct writeFileSync avoids the rename and propagates content atomically.
+      fs.writeFileSync(filepath, JSON.stringify({ type: 'message', text }));
       // Reset the idle timer so the container isn't killed mid-research on the follow-up.
       this.idleResetCallbacks.get(groupJid)?.();
       return true;

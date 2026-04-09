@@ -39,6 +39,15 @@ interface ContainerOutput {
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
+/** Max times drainIpcInput() will retry a file that has empty/unparseable content. */
+const IPC_READ_MAX_RETRIES = 5;
+/**
+ * Per-filename retry counter for virtiofs propagation delays.
+ * drainIpcInput() leaves the file in place and increments the count when
+ * readFileSync returns empty bytes or JSON.parse throws; the next poll cycle
+ * tries again.  After IPC_READ_MAX_RETRIES failures the file is discarded.
+ */
+const ipcReadRetries = new Map<string, number>();
 
 /** Auggie model override — set via AUGGIE_MODEL env var injected by the host. */
 const AUGGIE_MODEL = process.env.AUGGIE_MODEL || '';
@@ -180,21 +189,62 @@ function drainIpcInput(): string[] {
     const messages: string[] = [];
     for (const file of files) {
       const filePath = path.join(IPC_INPUT_DIR, file);
+      let raw: string;
+      let data: { type?: string; text?: string };
+
+      // --- Read + parse with virtiofs-aware retry ---
+      // On macOS/Docker with virtiofs, readdirSync can see a newly-renamed file
+      // before its data pages have propagated into the container, causing
+      // readFileSync to return '' and JSON.parse to throw.  Rather than
+      // immediately deleting the file (and losing the message), we leave it in
+      // place and try again on the next poll cycle, up to IPC_READ_MAX_RETRIES.
       try {
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        fs.unlinkSync(filePath);
-        if (data.type === 'message' && data.text) {
-          messages.push(data.text);
+        raw = fs.readFileSync(filePath, 'utf-8');
+        if (!raw.trim()) {
+          throw new Error('empty file');
         }
+        data = JSON.parse(raw);
       } catch (err) {
+        const retries = (ipcReadRetries.get(file) ?? 0) + 1;
+        if (retries < IPC_READ_MAX_RETRIES) {
+          ipcReadRetries.set(file, retries);
+          log(
+            `IPC file ${file} unreadable (attempt ${retries}/${IPC_READ_MAX_RETRIES}), will retry next poll: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          continue; // leave the file; next drainIpcInput() call will retry
+        }
+        // Exhausted retries — discard the file to unblock the queue.
         log(
-          `Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`,
+          `IPC file ${file} failed after ${IPC_READ_MAX_RETRIES} attempts, discarding: ${err instanceof Error ? err.message : String(err)}`,
         );
+        ipcReadRetries.delete(file);
         try {
           fs.unlinkSync(filePath);
         } catch {
           /* ignore */
         }
+        continue;
+      }
+
+      // Successful read — clear any accumulated retry count.
+      ipcReadRetries.delete(file);
+
+      // Push the message BEFORE attempting deletion so that a failed unlink
+      // can never cause the message to be silently dropped.
+      if (data.type === 'message' && data.text) {
+        messages.push(data.text);
+      }
+
+      try {
+        fs.unlinkSync(filePath);
+      } catch (unlinkErr: unknown) {
+        const code = (unlinkErr as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') {
+          log(
+            `Failed to delete IPC file ${file}: ${unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr)}`,
+          );
+        }
+        // ENOENT = file already gone (race with another reader) — non-fatal.
       }
     }
     return messages;
