@@ -1,0 +1,333 @@
+---
+name: add-discord-swarm
+description: Add Agent Swarm (Teams) support to Discord. Each subagent posts via its own webhook identity. Requires Discord channel to be set up first (use /add-discord). Triggers on "agent swarm discord", "discord swarm", "discord webhook pool", "bot pool discord".
+---
+
+# Add Agent Swarm to Discord
+
+This skill adds Agent Teams (Swarm) support to an existing Discord channel. Each subagent in a team posts via a dedicated webhook with its own username, so users can visually distinguish which agent is speaking.
+
+**Prerequisite**: Discord must already be set up via `/add-discord`. If `src/channels/discord.ts` does not exist or `DISCORD_BOT_TOKEN` is not configured, tell the user to run `/add-discord` first.
+
+## How It Works
+
+- The **main bot** receives messages and sends lead agent responses (already set up by `/add-discord`)
+- **Webhook pool** — N webhooks created in the target channel, one per configurable slot
+- When a subagent calls `send_message` with a `sender` parameter, the host assigns a webhook round-robin and posts with `username` set to the sender name
+- Messages appear in Discord from different webhook identities with custom usernames
+
+```
+Subagent calls send_message(text: "Found 3 results", sender: "Researcher")
+  → MCP writes IPC file with sender field
+  → Host IPC watcher picks it up
+  → Assigns webhook #2 to "Researcher" (round-robin, stable per group)
+  → Posts via WebhookClient with username: "Researcher"
+  → Appears in Discord as "Researcher" (webhook identity)
+```
+
+## Phase 1: Create Webhooks
+
+Tell the user:
+
+> I need you to create webhooks in your Discord channel. These will be used as agent identities.
+>
+> For each webhook (create 3–5 depending on how many agents you expect):
+>
+> 1. Open Discord and go to the channel where agents should post
+> 2. Click the channel name → **Edit Channel** → **Integrations** → **Webhooks**
+> 3. Click **New Webhook**
+> 4. Give it any placeholder name (e.g. "Agent 1") — the name is overridden at post time
+> 5. Click **Copy Webhook URL** — it looks like `https://discord.com/api/webhooks/1234.../abcdef...`
+> 6. Repeat for each webhook slot
+>
+> Paste all the webhook URLs here (one per line).
+
+Wait for the user to provide the URLs.
+
+## Phase 2: Apply Code Changes
+
+### Step 1: Update `src/config.ts`
+
+Read `src/config.ts`. Find the `OPTIONAL_ENV_VARS` array and add `'DISCORD_WEBHOOK_POOL'` alongside `'TELEGRAM_BOT_POOL'`. Then add the export near the `TELEGRAM_BOT_POOL` export:
+
+```typescript
+export const DISCORD_WEBHOOK_POOL = (
+  process.env.DISCORD_WEBHOOK_POOL ||
+  envConfig.DISCORD_WEBHOOK_POOL ||
+  ''
+)
+  .split(',')
+  .map((u) => u.trim())
+  .filter(Boolean);
+```
+
+### Step 2: Add Webhook Pool to `src/channels/discord.ts`
+
+Read `src/channels/discord.ts` and make these changes:
+
+**1. Add `WebhookClient` to the discord.js import:**
+
+```typescript
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  Message,
+  TextChannel,
+  WebhookClient,
+} from 'discord.js';
+```
+
+**2. Add module-level pool state** after the existing imports, before the `DiscordChannelOpts` interface:
+
+```typescript
+// Webhook pool for agent swarm: one WebhookClient per slot
+const webhookClients: WebhookClient[] = [];
+// Maps "{groupFolder}:{senderName}" → webhook index for stable assignment
+const senderWebhookMap = new Map<string, number>();
+let nextWebhookIndex = 0;
+```
+
+**3. Add pool functions** after the module-level state declarations:
+
+```typescript
+/**
+ * Initialize WebhookClient instances for the webhook pool.
+ */
+export function initWebhookPool(urls: string[]): void {
+  for (const url of urls) {
+    try {
+      webhookClients.push(new WebhookClient({ url }));
+    } catch (err) {
+      logger.error({ err }, 'Failed to initialize Discord webhook');
+    }
+  }
+  if (webhookClients.length > 0) {
+    logger.info({ count: webhookClients.length }, 'Discord webhook pool ready');
+  }
+}
+
+/**
+ * Send a message via a webhook assigned to the given sender name.
+ * Assigns webhooks round-robin on first use; subsequent messages from the
+ * same sender in the same group always use the same webhook.
+ * The webhook posts with username set to the sender name — no rename delay needed.
+ */
+export async function sendWebhookMessage(
+  jid: string,
+  text: string,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  if (webhookClients.length === 0) {
+    logger.warn('Discord webhook pool empty — falling back to bot sendMessage');
+    return;
+  }
+
+  const key = `${groupFolder}:${sender}`;
+  let idx = senderWebhookMap.get(key);
+  if (idx === undefined) {
+    idx = nextWebhookIndex % webhookClients.length;
+    nextWebhookIndex++;
+    senderWebhookMap.set(key, idx);
+    logger.info({ sender, groupFolder, webhookIndex: idx }, 'Assigned webhook to sender');
+  }
+
+  const webhook = webhookClients[idx];
+  const MAX_LENGTH = 2000;
+  try {
+    if (text.length <= MAX_LENGTH) {
+      await webhook.send({ content: text, username: sender });
+    } else {
+      for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        await webhook.send({ content: text.slice(i, i + MAX_LENGTH), username: sender });
+      }
+    }
+    logger.info({ jid, sender, webhookIndex: idx, length: text.length }, 'Discord webhook message sent');
+  } catch (err) {
+    logger.error({ jid, sender, err }, 'Failed to send Discord webhook message');
+  }
+}
+```
+
+### Step 3: Update IPC Routing in `src/ipc.ts`
+
+Read `src/ipc.ts`. Find the IPC message routing block inside `processIpcFiles` that currently looks like:
+
+```typescript
+if (data.sender && data.chatJid.startsWith('tg:')) {
+  await sendPoolMessage(
+    data.chatJid,
+    data.text,
+    data.sender,
+    sourceGroup,
+  );
+} else {
+  await deps.sendMessage(data.chatJid, data.text);
+}
+```
+
+**1. Add the import** for `sendWebhookMessage` at the top alongside the existing `sendPoolMessage` import:
+
+```typescript
+import { sendPoolMessage } from './channels/telegram.js';
+import { sendWebhookMessage } from './channels/discord.js';
+```
+
+**2. Update the routing block** to also handle Discord:
+
+```typescript
+if (data.sender && data.chatJid.startsWith('tg:')) {
+  await sendPoolMessage(
+    data.chatJid,
+    data.text,
+    data.sender,
+    sourceGroup,
+  );
+} else if (data.sender && data.chatJid.startsWith('dc:')) {
+  await sendWebhookMessage(
+    data.chatJid,
+    data.text,
+    data.sender,
+    sourceGroup,
+  );
+} else {
+  await deps.sendMessage(data.chatJid, data.text);
+}
+```
+
+### Step 4: Initialize Pool in `src/index.ts`
+
+Read `src/index.ts`. Find the existing Telegram bot pool initialization block:
+
+```typescript
+// Initialize Telegram bot pool for agent swarm support
+if (TELEGRAM_BOT_POOL.length > 0) {
+  await initBotPool(TELEGRAM_BOT_POOL);
+}
+```
+
+**1. Add `DISCORD_WEBHOOK_POOL` to the config import.**
+
+**2. Add `initWebhookPool` to the discord.ts import** alongside `initBotPool`:
+
+```typescript
+import { initWebhookPool } from './channels/discord.js';
+```
+
+**3. Add Discord pool init** immediately after the Telegram block:
+
+```typescript
+// Initialize Discord webhook pool for agent swarm support
+if (DISCORD_WEBHOOK_POOL.length > 0) {
+  initWebhookPool(DISCORD_WEBHOOK_POOL);
+}
+```
+
+### Step 5: Update Group CLAUDE.md Files
+
+For each Discord group folder that will use agent teams, read its `groups/{folder}/CLAUDE.md` and add an Agent Teams section following the same pattern as Telegram swarm. The key difference is `sender` makes the message appear from a Discord webhook identity:
+
+```markdown
+## Agent Teams
+
+When creating a team to tackle a complex task, follow these rules:
+
+### CRITICAL: Follow the user's prompt exactly
+
+Create *exactly* the team the user asked for — same number of agents, same roles, same names. Do NOT add extra agents, rename roles, or use generic names like "Researcher 1".
+
+### Team member instructions
+
+Each team member MUST be instructed to:
+
+1. **Share progress in the group** via `mcp__nanoclaw__send_message` with a `sender` parameter matching their exact role/character name (e.g., `sender: "Marine Biologist"`). This makes their messages appear from a dedicated webhook identity in Discord.
+2. **Also communicate with teammates** via `SendMessage` as normal for coordination.
+3. Keep group messages **short** — 2–4 sentences max. Break longer content into multiple `send_message` calls.
+4. Use the `sender` parameter consistently — always the same name so the webhook identity stays stable.
+
+### Lead agent behavior
+
+- You do NOT need to relay every teammate message. The user sees those directly from the webhook identities.
+- Send your own messages only to comment, synthesize, or direct the team.
+- When processing an internal update from a teammate that doesn't need a user-facing response, wrap your *entire* output in `<internal>` tags.
+```
+
+## Phase 3: Configure Environment
+
+Add to `.env` (comma-separated webhook URLs):
+
+```bash
+DISCORD_WEBHOOK_POOL=https://discord.com/api/webhooks/...,https://discord.com/api/webhooks/...
+```
+
+Sync to container environment:
+
+```bash
+cp .env data/env/env
+```
+
+## Phase 4: Build and Restart
+
+```bash
+npm run build
+systemctl --user restart nanoclaw
+# macOS: launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+```
+
+## Phase 5: Test
+
+Tell the user:
+
+> Send a message in your registered Discord channel asking for a multi-agent task, e.g.:
+> "Assemble a team of a researcher and a coder to build me a hello world app"
+>
+> You should see:
+> - The lead agent (main bot) acknowledging and creating the team
+> - Each subagent posting from a different webhook username
+> - Short, scannable messages from each agent
+>
+> Check logs: `tail -f logs/nanoclaw.log | grep -i webhook`
+
+## Architecture Notes
+
+- Webhook names are fixed — set once in Discord at creation time and never overridden. The `username` field is intentionally omitted so each webhook keeps its Discord-assigned name
+- Sender→webhook mapping is stable within a group (keyed as `{groupFolder}:{senderName}`)
+- Mapping resets on service restart — webhooks get reassigned fresh
+- If the pool has fewer webhooks than senders, webhooks are reused (round-robin wraps)
+- Webhook URLs are sensitive — keep them in `.env` only, never commit to git
+
+## Troubleshooting
+
+### Webhook messages not appearing
+
+1. Check `DISCORD_WEBHOOK_POOL` is set in `.env` AND synced to `data/env/env`
+2. Check pool initialized: `grep "webhook pool ready" logs/nanoclaw.log`
+3. Check webhook URLs are valid: `curl -s "<url>"` should return webhook info JSON
+4. Verify webhooks belong to the correct Discord channel
+
+### Webhook URLs using discordapp.com domain
+
+discord.js only accepts `discord.com` webhook URLs. If users copy URLs with `discordapp.com`, they are automatically normalized to `discord.com` at init time — this is handled in code and requires no action.
+
+### Webhook URL expired or deleted
+
+Discord webhook URLs are permanent unless manually deleted. If a URL stops working:
+1. Go to the channel → **Integrations** → **Webhooks**
+2. Delete the old webhook and create a new one
+3. Update `DISCORD_WEBHOOK_POOL` in `.env` and `data/env/env`
+4. Restart NanoClaw
+
+### Subagents not using send_message with sender
+
+Check the group's `CLAUDE.md` has the Agent Teams section. The lead agent reads this when creating teammates and must include the `send_message` + `sender` instructions in each teammate's prompt.
+
+## Removal
+
+1. Remove `DISCORD_WEBHOOK_POOL` from `src/config.ts`
+2. Remove `initWebhookPool`, `sendWebhookMessage`, pool state from `src/channels/discord.ts`
+3. Remove the `dc:` branch from IPC routing in `src/ipc.ts`
+4. Remove `initWebhookPool` call and import from `src/index.ts`
+5. Remove Agent Teams section from group CLAUDE.md files
+6. Remove `DISCORD_WEBHOOK_POOL` from `.env` and `data/env/env`
+7. Rebuild: `npm run build && systemctl --user restart nanoclaw`
